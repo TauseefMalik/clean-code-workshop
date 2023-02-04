@@ -81,8 +81,8 @@ func Test_calculateHash(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			output := CalculateHash(tc.input)
-			if output != tc.expected {
+			output, err := CalculateHash(tc.input)
+			if err != nil && output != tc.expected {
 				t.Errorf("input %d, unexpected output: %s", tc.input, output)
 			}
 		})

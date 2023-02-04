@@ -1,7 +1,9 @@
 package main
 
 import (
+	"clean-code-workshop/constants"
 	"crypto/sha1"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -23,12 +25,18 @@ const (
 // Base conv
 const base int64 = 10
 
+type duplicateFileInfo struct {
+	hashes     map[string]string
+	duplicates map[string]string
+	dupeSize   *int64
+}
+
 // Traverse a given directory recursively and compare file contents to identify duplicate
-func traverseDirAndProcessDuplicates(hashes, duplicates map[string]string, dupeSize *int64, entries []os.FileInfo, directory string) {
+func traverseDirAndProcessDuplicates(dmap duplicateFileInfo, entries []os.FileInfo, directory string) error {
 	for _, entry := range entries {
 		fullpath := (path.Join(directory, entry.Name()))
 
-		//
+		// Ignore directory or file
 		if !entry.Mode().IsDir() && !entry.Mode().IsRegular() {
 			continue
 		}
@@ -36,42 +44,51 @@ func traverseDirAndProcessDuplicates(hashes, duplicates map[string]string, dupeS
 		if entry.IsDir() {
 			dirFiles, err := ioutil.ReadDir(fullpath)
 			if err != nil {
-				panic(err)
+				return errors.New(constants.FAILEDTOREADDIR)
 			}
-			traverseDirAndProcessDuplicates(hashes, duplicates, dupeSize, dirFiles, fullpath)
+			traverseDirAndProcessDuplicates(dmap, dirFiles, fullpath)
 			continue
 		}
-		file := ReadFileContent(fullpath)
-		h := CalculateHash(file)
-		StoreDuplicates(hashes, h, duplicates, fullpath, dupeSize, entry)
+		file, err := ReadFileContent(fullpath)
+		if err != nil {
+			return err
+		}
+		hash, err := CalculateHash(file)
+		if err != nil {
+			fmt.Printf(constants.FAILEDTOCALCHASH)
+		}
+		StoreDuplicates(dmap, hash, fullpath, entry)
 	}
+	return nil
 }
 
-func ReadFileContent(fullpath string) []byte {
+func ReadFileContent(fullpath string) ([]byte, error) {
 	file, err := ioutil.ReadFile(fullpath)
 	if err != nil {
-		panic(err)
+		return nil, errors.New(constants.FAILEDTOREADFILE)
 	}
-	return file
+	// defer
+
+	return file, nil
 }
 
-func CalculateHash(file []byte) string {
+func CalculateHash(file []byte) (string, error) {
 	hash := sha1.New()
 	if _, err := hash.Write(file); err != nil {
-		panic(err)
+		return "", errors.New(constants.FAILEDTOWRITEHASH)
 	}
 	hashSum := hash.Sum(nil)
 	hashString := fmt.Sprintf("%x", hashSum)
-	return hashString
+	return hashString, nil
 }
 
-func StoreDuplicates(hashes map[string]string, hashString string, duplicates map[string]string, fullpath string, dupeSize *int64, entry fs.FileInfo) {
+func StoreDuplicates(dmap duplicateFileInfo, hashString string, fullpath string, entry fs.FileInfo) {
 	// store duplicate file path along with its size
-	if hashEntry, ok := hashes[hashString]; ok {
-		duplicates[hashEntry] = fullpath
-		atomic.AddInt64(dupeSize, entry.Size())
+	if hashEntry, ok := dmap.hashes[hashString]; ok {
+		dmap.duplicates[hashEntry] = fullpath
+		atomic.AddInt64(dmap.dupeSize, entry.Size())
 	} else {
-		hashes[hashString] = fullpath
+		dmap.hashes[hashString] = fullpath
 	}
 }
 
@@ -104,26 +121,24 @@ func main() {
 	if *dir == "" {
 		*dir, err = os.Getwd()
 		if err != nil {
-			panic(err)
+			fmt.Printf(constants.FAILEDTOGETCURRDIR)
 		}
 	}
 
-	hashes := map[string]string{}
-	duplicates := map[string]string{}
-	var dupeSize int64
-
 	entries, err := ioutil.ReadDir(*dir)
 	if err != nil {
-		panic(err)
+		fmt.Printf(constants.FAILEDTOREADDIR)
 	}
-
-	traverseDirAndProcessDuplicates(hashes, duplicates, &dupeSize, entries, *dir)
-
+	d := duplicateFileInfo{}
+	err = traverseDirAndProcessDuplicates(d, entries, *dir)
+	if err != nil {
+		fmt.Printf("Unexpected error: %s", err.Error())
+	}
 	fmt.Println("DUPLICATES")
 
-	fmt.Println("TOTAL FILES:", len(hashes))
-	fmt.Println("DUPLICATES:", len(duplicates))
-	fmt.Println("TOTAL DUPLICATE SIZE:", toReadableSize(dupeSize))
+	fmt.Println("TOTAL FILES:", len(d.hashes))
+	fmt.Println("DUPLICATES:", len(d.duplicates))
+	fmt.Println("TOTAL DUPLICATE SIZE:", toReadableSize(*d.dupeSize))
 }
 
 // running into problems of not being able to open directories inside .app folders
