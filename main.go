@@ -12,17 +12,23 @@ import (
 	"sync/atomic"
 )
 
+// Sizes
 const (
-	TB = 1000 * 1000 * 1000 * 1000
-	GB = 1000 * 1000 * 1000
-	MB = 1000 * 1000
-	KB = 1000
+	KB int64 = 1000
+	MB       = 1000 * KB
+	GB       = 1000 * MB
+	TB       = 1000 * GB
 )
 
-func traverseDir(hashes, duplicates map[string]string, dupeSize *int64, entries []os.FileInfo, directory string) {
+// Base conv
+const base int64 = 10
+
+// Traverse a given directory recursively and compare file contents to identify duplicate
+func traverseDirAndProcessDuplicates(hashes, duplicates map[string]string, dupeSize *int64, entries []os.FileInfo, directory string) {
 	for _, entry := range entries {
 		fullpath := (path.Join(directory, entry.Name()))
 
+		//
 		if !entry.Mode().IsDir() && !entry.Mode().IsRegular() {
 			continue
 		}
@@ -32,16 +38,21 @@ func traverseDir(hashes, duplicates map[string]string, dupeSize *int64, entries 
 			if err != nil {
 				panic(err)
 			}
-			traverseDir(hashes, duplicates, dupeSize, dirFiles, fullpath)
+			traverseDirAndProcessDuplicates(hashes, duplicates, dupeSize, dirFiles, fullpath)
 			continue
 		}
-		file, err := ioutil.ReadFile(fullpath)
-		if err != nil {
-			panic(err)
-		}
+		file := ReadFileContent(fullpath)
 		h := CalculateHash(file)
 		StoreDuplicates(hashes, h, duplicates, fullpath, dupeSize, entry)
 	}
+}
+
+func ReadFileContent(fullpath string) []byte {
+	file, err := ioutil.ReadFile(fullpath)
+	if err != nil {
+		panic(err)
+	}
+	return file
 }
 
 func CalculateHash(file []byte) string {
@@ -55,6 +66,7 @@ func CalculateHash(file []byte) string {
 }
 
 func StoreDuplicates(hashes map[string]string, hashString string, duplicates map[string]string, fullpath string, dupeSize *int64, entry fs.FileInfo) {
+	// store duplicate file path along with its size
 	if hashEntry, ok := hashes[hashString]; ok {
 		duplicates[hashEntry] = fullpath
 		atomic.AddInt64(dupeSize, entry.Size())
@@ -64,24 +76,29 @@ func StoreDuplicates(hashes map[string]string, hashString string, duplicates map
 }
 
 func toReadableSize(nbytes int64) string {
-	if nbytes > TB {
-		return strconv.FormatInt(nbytes/(TB), 10) + " TB"
+	var readableSz string
+	switch {
+	case nbytes > TB:
+		readableSz = ConvertByteToSize(nbytes, TB) + " TB"
+	case nbytes > GB:
+		readableSz = ConvertByteToSize(nbytes, GB) + " GB"
+	case nbytes > MB:
+		readableSz = ConvertByteToSize(nbytes, MB) + " MB"
+	case nbytes > KB:
+		readableSz = ConvertByteToSize(nbytes, KB) + " KB"
+	default:
+		readableSz = ConvertByteToSize(nbytes, 1) + " B"
 	}
-	if nbytes > GB {
-		return strconv.FormatInt(nbytes/(GB), 10) + " GB"
-	}
-	if nbytes > MB {
-		return strconv.FormatInt(nbytes/(MB), 10) + " MB"
-	}
-	if nbytes > KB {
-		return strconv.FormatInt(nbytes/KB, 10) + " KB"
-	}
-	return strconv.FormatInt(nbytes, 10) + " B"
+	return readableSz
+}
+
+func ConvertByteToSize(n int64, size int64) string {
+	return strconv.FormatInt(n/size, int(base))
 }
 
 func main() {
 	var err error
-	dir := flag.String("path", "~/duplicates_files_directory", "the path to traverse searching for duplicates")
+	dir := flag.String("path", "", "the path to traverse searching for duplicates")
 	flag.Parse()
 
 	if *dir == "" {
@@ -100,7 +117,7 @@ func main() {
 		panic(err)
 	}
 
-	traverseDir(hashes, duplicates, &dupeSize, entries, *dir)
+	traverseDirAndProcessDuplicates(hashes, duplicates, &dupeSize, entries, *dir)
 
 	fmt.Println("DUPLICATES")
 
